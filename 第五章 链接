@@ -1,0 +1,118 @@
+第5章 链接
+5.1 链接的概念与作用
+【概念】
+链接是将各种代码和数据片段收集并组合成一个单一文件的过程，这个文件可被加载到内存并执行。
+1.	链接可以执行于编译时，也就是在源代码被编译成机器代码时。
+2.	链接可以执行于加载时，也就是在程序被加载器加载到内存并执行时。
+3.	链接可以执行于运行时，也就是由应用程序来执行。
+【作用】
+1.	将各种代码和数据片段收集、组合成一个单一的文件。
+2.	链接是由叫做链接器的程序执行的，链接器使得分离编译成为可能。
+5.2 在Ubuntu下链接的命令
+【命令】
+ld -o hello -dynamic-linker /lib64/ld-linux-x86-64.so.2 /usr/lib/x86_64-linux-gnu/crt1.o /usr/lib/x86_64-linux-gnu/crti.o hello.o /usr/lib/x86_64-linux-gnu/libc.so /usr/lib/x86_64-linux-gnu/crtn.o
+（注：因为需要生成64位程序，所以使用动态链接器和链接的目标都应该是64位的。）
+
+ 
+图5.1 使用ld命令链接生成的可执行文件hello
+
+5.3 可执行目标文件hello的格式
+使用 readelf -a hello > hello2.elf 命令生成 hello 程序的 ELF 格式文件（hello2.elf）。
+在 ELF 格式文件中，Section Headers 对 hello 中所有的节信息进行了声明，其中包括大小Size以及在程序中的偏移量Offset，因此根据Section Headers中的信息我们就可以用HexEdit定位各个节所占的区间（起始位置，大小）。其中Address是程序被载入到虚拟地址的起始地址。如图：
+
+ 
+图5.2 hello的ELF格式（hello2.elf）中的Section Headers Table
+
+5.4 hello的虚拟地址空间
+使用edb打开hello程序，通过edb的Data Dump窗口查看加载到虚拟地址中的hello程序，如图5.3。  
+在0x400000~0x401000段中，程序被载入，自虚拟地址0x400000开始，自0x400fff结束，这之间每个节（开始~ .eh_frame节）的排列即开始结束同图5.2中Address中声明。  
+
+ 
+图5.3 hello程序（edb中打开）
+
+如图 5.4，查看ELF格式文件中的Program Headers，程序头表在执行的时候被使用，它告诉链接器运行时加载的内容并提供动态链接的信息。每一个表项提供了各段在虚拟地址空间和物理地址空间的大小、位置、标志、访问权限和对齐方面的信息。在下面可以看出，程序包含8个段： 
+1） PHDR 保存程序头表。 
+2） INTERP 指定在程序已经从可执行文件映射到内存之后，必须调用的解释 器（如动态链接器）。 
+3） LOAD 表示一个需要从二进制文件映射到虚拟地址空间的段。其中保存了 常量数据（如字符串）、程序的目标代码等。 
+4） DYNAMIC 保存了由动态链接器使用的信息。 
+5） NOTE 保存辅助信息。 
+6） GNU_STACK：权限标志，标志栈是否是可执行的。 
+7） GNU_RELRO：指定在重定位结束之后那些内存区域是需要设置只读。
+
+ 
+图5.4 hello的ELF格式（hello2.elf）中的Program Headers Table
+
+通过 Data Dump 查看虚拟地址段 0x600000~0x602000，在 0~fff 空间中，与 0x400000~0x401000 段的存放的程序相同，在 fff 之后存放的是.dynamic~.shstrtab 节。
+
+5.5 链接的重定位过程分析
+使用objdump -d -r hello > hello2.objdump获得hello的反汇编代码。  
+与hello.o反汇编文本hello.objdump相比，在hello2.objdump中多了许多节， 列在下面。
+节名称	描述
+.interp	保存ld.so的路径
+.note.ABI-tag	Linux下特有的section
+.hash	符号的哈希表
+.gnu.hash	GNU拓展的符号的哈希表
+.dynsym	运行时/动态符号表
+.dynstr	存放.dynsym节中的符号名称
+.gnu.version	符号版本
+.gnu.version_	符号引用版本
+.rela.dyn	运行时/动态重定位表
+.rela.plt	.plt节的重定位条目
+.init	程序初始化需要的代码
+.plt	动态链接-过程链接表
+.fini	当程序正常终止时需要执行的代码
+.eh_frame	包含异常展开和源语言信息。
+.dynamic	存放被ld.so使用的动态链接信息
+.got	动态链接-全局偏移量表-存放变量
+.got.plt	动态链接-全局偏移量表-存放函数
+.data	初始化了的数据
+.comment	一串包含了编译器的NULL-terminated的字符串
+
+通过比较 hello2.objdump 和 hello.objdump 了解链接器。  
+【函数个数】
+在使用 ld 命令链接的时候，指定了动态链接器为 64 的 /lib64/ld-linux-x86-64.so.2，crt1.o、crti.o、crtn.o 中主要定义了程序入口_start、初 始化函数_init，_start 程序调用 hello.c 中的 main 函数，libc.so 是动态链接共享库， 其中定义了 hello.c 中用到的 printf、sleep、getchar、exit 函数和_start 中调用的 __libc_csu_init，__libc_csu_fini，__libc_start_main。链接器将上述函数加入。  
+【函数调用】
+链接器解析重定条目时发现对外部函数调用的类型为 R_X86_64_PLT32 的重定位，此时动态链接库中的函数已经加入到了 PLT 中， .text 与.plt 节相对距离已经确定，链接器计算相对距离，将对动态链接库中函数的调用 值改为 PLT 中相应函数与下条指令的相对地址，指向对应函数。对于此类重定位 链接器为其构造.plt 与.got.plt。
+【.rodata 引用】
+链接器解析重定条目时发现两个类型为 R_X86_64_PC32 的 对.rodata 的重定位（printf 中的两个字符串），.rodata 与.text 节之间的相对距离确 定，因此链接器直接修改 call 之后的值为目标地址与下一条指令的地址之差，指 向相应的字符串
+5.6 hello的执行流程
+	使用edb执行hello程序，观察函数执行流程，现将过程中执行的主要函数及其地址罗列如下：
+子程序名称	地址
+ld-2.27.so!_dl_start	0x7fce 8cc38ea0
+ld-2.27.so!_dl_init	0x7fce 8cc47630
+hello!_start	0x400500
+libc-2.27.so!__libc_start_main	0x7fce 8c867ab0
+-libc-2.27.so!__cxa_atexit	0x7fce 8c889430
+- libc-2.27.so!__libc_csu_init	0x4005c0
+hello!_init	0x400488
+libc-2.27.so!_setjmp	0x7fce 8c884c10
+- libc-2.27.so!_sigsetjmp	0x7fce 8c884b70
+--libc-2.27.so!__sigjmp_save	0x7fce 8c884bd0
+hello!main	0x400532
+hello!puts@plt	0x4004b0
+hello!exit@plt	0x4004e0
+*hello!printf@plt	--
+*hello!sleep@plt	--
+*hello!getchar@plt	--
+ld-2.27.so!_dl_runtime_resolve_xsave	0x7fce 8cc4e680
+-ld-2.27.so!_dl_fixup	0x7fce 8cc46df0
+--ld-2.27.so!_dl_lookup_symbol_x	0x7fce 8cc420b0
+libc-2.27.so!exit	0x7fce 8c889128  
+
+5.7 Hello的动态链接分析
+	对于动态共享链接库中PIC函数，编译器没有办法预测函数的运行时地址，所 以需要添加重定位记录，等待动态链接器处理，为避免运行时修改调用模块的代 码段，链接器采用延迟绑定的策略。动态链接器使用过程链接表（PLT）+全局偏移量表（GOT）实现函数的动态链接，GOT中存放函数目标地址，PLT使用GOT中地址跳转到目标函数。
+在dl_init调用之前，对于每一条PIC函数调用，调用的目标地址都实际指向PLT中的代码逻辑，GOT存放的是PLT中函数调用指令的下一条指令地址。如图 5.5 (a)。
+在dl_init调用之后，如图 5.5 (b)，0x6008c0和0x6008c8处的两8B数据分别发生改变为0x683118f5da7f0000和0x7038f7f4da7f0000。
+
+ 
+图5.5（a） 没有调用dl_init之前的全局偏移量表.got.plt
+
+ 
+图5.5（b） 调用dl_init之前的全局偏移量表.got.plt
+
+在之后的函数调用时，首先跳转到PLT执行.plt中逻辑，第一次访问跳转时GOT地址为下一条指令，将函数序号压栈，然后跳转到PLT[0]，在PLT[0]中将重定位表地址压栈，然后访问动态链接器，在动态链接器中使用函数序号和重定位表确定函数运行时地址，重写GOT，再将控制传递给目标函数。之后如果对同样函数调用，第一次访问跳转直接跳转到目标函数。  
+因为在PLT中使用的jmp，所以执行完目标函数之后的返回地址为最近call指 令下一条指令地址，即在main中的调用完成地址。
+
+5.8 本章小结
+本章只要介绍了链接的概念、作用和ubuntu下动态链接64位的命令。
+具体考察了hello程序从hello.o到hello可执行文件的过程，分析了hello的虚拟地址空间、重定位过程、执行流程和动态链接过程。
