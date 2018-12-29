@@ -1,0 +1,100 @@
+第8章 hello的IO管理
+8.1 Linux的IO设备管理方法
+【设备的模型化】
+所有的IO设备都被模型化为文件，而所有的输入和输出都被当做对相应文件的读和写操作。
+【设备管理】
+这种将设备映射为文件模型化方式，允许Linux内核引出一个简单低级的应用接口，称为Unix I/O。
+
+8.2 简述Unix IO接口及其函数
+【Unix I/O接口统一操作】
+1.	打开文件。一个应用程序通过要求内核打开相应的文件，来宣告它想要访问一个I/O设备，内核返回一个小的非负整数，叫做描述符，它在后续对此文件的所有操作中标识这个文件，内核记录有关这个打开文件的所有信息。
+2.	Shell创建的每个进程都有三个打开的文件：标准输入，标准输出，标准错误。
+3.	改变当前的文件位置：对于每个打开的文件，内核保持着一个文件位置k，初始为0，这个文件位置是从文件开头起始的字节偏移量，应用程序能够通过执行seek，显式地将改变当前文件位置k。
+4.	读写文件：一个读操作就是从文件复制 n>0 个字节到内存，从当前文件位置k开始，然后将k增加到k+n，给定一个大小为 m 字节的而文件，当k>=m 时，触发EOF。类似一个写操作就是从内存中复制n>0个字节到一个文件，从当前文件位置k开始，然后更新k。 
+5.	关闭文件，内核释放文件打开时创建的数据结构，并将这个描述符恢复到可用的描述符池中去。 
+【Unix I/O函数】
+1.	int open(char* filename,int flags,mode_t mode) ，进程通过调用open函数来打开一个存在的文件或是创建一个新文件的。open函数将filename转换为一个文件描述符，并且返回描述符数字，返回的描述符总是在进程中当前没有打开的最小描述符，flags 参数指明了进程打算如何访问这个文件，mode参数指定了新文件的访问权限位。
+2.	int close(fd)，fd是需要关闭的文件的描述符，close返回操作结果。
+3.	ssize_t read(int fd,void *buf,size_t n)，read函数从描述符为fd的当前文件位置赋值最多n个字节到内存位置buf。返回值-1表示一个错误，0表示EOF，否则返回值表示的是实际传送的字节数量。
+4.	ssize_t wirte(int fd,const void *buf,size_t n)，write 函数从内存位置buf复制至多n个字节到描述符为fd的当前文件位置。
+
+8.3 printf的实现分析
+【前提】
+printf和vsprintf代码是windows下的。  
+查看printf代码：
+int printf(const char *fmt, ...) 
+{
+	int i;
+	char buf[256];
+	va_list arg = (va_list)((char*)(&fmt) + 4);
+	i = vsprintf(buf, fmt, arg);
+	write(buf, i);
+	return i;
+}
+首先arg获得第二个不定长参数，即输出的时候格式化串对应的值。 
+查看vsprintf代码：
+int vsprintf(char *buf, const char *fmt, va_list args) 
+{
+	char* p;     
+	char tmp[256];     
+	va_list p_next_arg = args;
+	for (p = buf; *fmt; fmt++) 
+	{
+		if (*fmt != '%') {//忽略无关字符
+			*p++ = *fmt;
+			continue;
+		}
+		fmt++;
+		switch (*fmt)
+		{
+		case 'x':  //只处理%x一种情况                 
+			itoa(tmp, *((int*)p_next_arg)); //将输入参数值转化为字符串保存在tmp                 
+			strcpy(p, tmp); //将tmp字符串复制到p处                
+			p_next_arg += 4; //下一个参数值地址                 
+			p += strlen(tmp); //放下一个参数值的地址                 
+			break;
+		case 's':
+			break;
+		default:
+			break;
+		}
+	}         
+	return (p - buf); //返回最后生成的字符串的长度 
+}
+则知道vsprintf程序按照格式fmt结合参数args生成格式化之后的字符串，并返回字串的长度。 
+在printf中调用系统函数write(buf,i)将长度为i的buf输出。write函数如下：
+
+write:      
+	mov eax, _NR_write      
+	mov ebx, [esp + 4]      
+	mov ecx, [esp + 8]  
+	int INT_VECTOR_SYS_CALL
+
+在write函数中，将栈中参数放入寄存器，ecx是字符个数，ebx存放第一个字符地址，int INT_VECTOR_SYS_CALLA代表通过系统调用syscall，查看syscall的实现：
+
+sys_call : 
+	call save
+
+	push dword[p_proc_ready]
+
+	sti    
+
+	push ecx      
+	push ebx       
+	call[sys_call_table + eax * 4]       
+	add esp, 4 * 3     
+
+	mov[esi + EAXREG - P_STACKBASE], eax  
+
+	cli
+
+ret
+
+syscall将字符串中的字节“Hello H170301801 YuanKang”从寄存器中通过总线复制到显卡的显存中，显存中存储的是字符的ASCII码。字符显示驱动子程序将通过ASCII码在字模库中找到点阵信息将点阵信息存储到vram中。显示芯片会按照一定的刷新频率逐行读取vram，并通过信号线向液晶显示器传输每一个点（RGB 分量）。 于是我们的打印字符串“Hello H170301801 YuanKang”就显示在了屏幕上。
+
+8.4 getchar的实现分析
+异步异常-键盘中断的处理：当用户按键时，键盘接口会得到一个代表该按键 的键盘扫描码，同时产生一个中断请求，中断请求抢占当前进程运行键盘中断子 程序，键盘中断子程序先从键盘接口取得该按键的扫描码，然后将该按键扫描码 转换成ASCII码，保存到系统的键盘缓冲区之中。
+getchar函数落实到底层调用了系统函数read，通过系统调用read读取存储在 键盘缓冲区中的ASCII码直到读到回车符然后返回整个字串，getchar进行封装， 大体逻辑是读取字符串的第一个字符然后返回。
+
+8.5本章小结
+本章主要介绍了Linux的IO设备管理方法、Unix IO接口及其函数。重点分析了printf函数和getchar函数。
